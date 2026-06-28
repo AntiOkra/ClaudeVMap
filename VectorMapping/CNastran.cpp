@@ -243,11 +243,23 @@ int CNastran::Indexing()
 		if (e.m_type == CTRIA3) {
 			node_cnt = 3;
 		}
+		else if (e.m_type == CBEAM) {
+			node_cnt = 2;
+		}
 		else {
 			node_cnt = 4;
 		}
 		for (int j = 0; j < node_cnt; j++) {
-			e.m_NodeIndex[j] = m_mNodeIDtoIndex[e.m_NodeID[j]];
+			// Validate the referenced node ID instead of letting operator[]
+			// silently insert index 0 for an unknown node.
+			auto it = m_mNodeIDtoIndex.find(e.m_NodeID[j]);
+			if (it == m_mNodeIDtoIndex.end()) {
+				CString msg;
+				msg.Format(_T(" #ERROR Element(%d) refers to unknown Node(%d)\n"), e.m_ID, e.m_NodeID[j]);
+				LogWrite(msg);
+				return 1;
+			}
+			e.m_NodeIndex[j] = it->second;
 		}
 	}
 

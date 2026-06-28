@@ -36,7 +36,7 @@ int CAdxNode::Copy(CAdxNode& n)
 {
 	m_ID = n.m_ID;
 	m_Coord = n.m_Coord;
-	m_ForceVector = m_ForceVector;
+	m_ForceVector = n.m_ForceVector;
 
 	return 0;
 }

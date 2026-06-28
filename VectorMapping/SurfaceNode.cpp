@@ -140,9 +140,17 @@ int CSurfaceNode::NearestNode(CMzPoint& p, double upr_limit, CAdxNode** pp_node,
 	CAdxNode *tmp_node = NULL;
 	double tmp_dst = 0.0;
 
-	for (int ix = ax - 1; ix <= ax + 1; ix++) {
-		for (int iy = ay - 1; iy <= ay + 1; iy++) {
-			for (int iz = az - 1; iz <= az + 1; iz++) {
+	// Expand the cell search range so it always covers upr_limit,
+	// independent of the AreaMap grid pitch.
+	int cell_range = 1;
+	if (m_AreaMap.area_size > 0.0) {
+		cell_range = (int)ceil(upr_limit / m_AreaMap.area_size);
+		if (cell_range < 1) cell_range = 1;
+	}
+
+	for (int ix = ax - cell_range; ix <= ax + cell_range; ix++) {
+		for (int iy = ay - cell_range; iy <= ay + cell_range; iy++) {
+			for (int iz = az - cell_range; iz <= az + cell_range; iz++) {
 
 				if (m_AreaMap.GetArrayIndex(ix, iy, iz, area_index) != 0) {
 					continue;
@@ -151,18 +159,23 @@ int CSurfaceNode::NearestNode(CMzPoint& p, double upr_limit, CAdxNode** pp_node,
 				CArea& a = *(m_AreaMap.m_vArea[area_index]);
 				if (!a.IsEmpty()) {
 					if (a.NearestNode(p, &tmp_node, tmp_dst) == 0) {
+						// Track the true nearest node; the distance limit is
+						// applied once, after the whole neighbourhood is scanned.
+						// (A nearer-but-out-of-limit node must not shadow a
+						//  valid within-limit node.)
 						if (tmp_dst < min_dst) {
 							min_dst = tmp_dst;
-							if (tmp_dst < upr_limit) {
-								p_nearest_node = tmp_node;
-								exist_node = true;
-							}
+							p_nearest_node = tmp_node;
 						}
 					}
 				}
 
 			}
 		}
+	}
+
+	if (p_nearest_node != NULL && min_dst < upr_limit) {
+		exist_node = true;
 	}
 
 	if (exist_node) {
@@ -202,7 +215,7 @@ int CSurfaceNode::ExportAdxForce(CString& opath, CString& process)
 	for (int i = 0; i < m_vNode.size(); i++) {
 		CAdxNode& n = *(m_vNode[i]);
 
-		if (n.m_ForceVector.x != 0.0 || n.m_ForceVector.x != 0.0 || n.m_ForceVector.x != 0.0) {
+		if (n.m_ForceVector.x != 0.0 || n.m_ForceVector.y != 0.0 || n.m_ForceVector.z != 0.0) {
 			buf.Format(_T("%8d 0 %12.6f\n"), n.m_ID, n.m_ForceVector.x);
 			oFile.WriteString(buf);
 			buf.Format(_T("%8d 1 %12.6f\n"), n.m_ID, n.m_ForceVector.y);

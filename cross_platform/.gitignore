@@ -1,0 +1,4 @@
+build/
+vm_test_*
+*.o
+*.obj
