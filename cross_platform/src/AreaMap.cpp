@@ -65,4 +65,33 @@ SurfaceNode* AreaMap::NearestNode(const Vec3& p, double upr_limit, double& dista
     return nullptr;
 }
 
+void AreaMap::NodesInRange(const Vec3& p, double upr_limit,
+                           std::vector<std::pair<SurfaceNode*, double>>& out) {
+    out.clear();
+    if (cells_.empty()) return;
+
+    const CellKey c = IndexOf(p);
+    int cell_range = 1;
+    if (pitch_ > 0.0) {
+        cell_range = static_cast<int>(std::ceil(upr_limit / pitch_));
+        if (cell_range < 1) cell_range = 1;
+    }
+    const double limit2 = upr_limit * upr_limit;
+
+    for (int ix = c.ix - cell_range; ix <= c.ix + cell_range; ++ix) {
+        for (int iy = c.iy - cell_range; iy <= c.iy + cell_range; ++iy) {
+            for (int iz = c.iz - cell_range; iz <= c.iz + cell_range; ++iz) {
+                auto it = cells_.find(CellKey{ix, iy, iz});
+                if (it == cells_.end()) continue;
+                for (SurfaceNode* n : it->second) {
+                    const double d2 = n->coord.DistanceSquared(p);
+                    if (d2 < limit2) {
+                        out.emplace_back(n, std::sqrt(d2));
+                    }
+                }
+            }
+        }
+    }
+}
+
 } // namespace vm

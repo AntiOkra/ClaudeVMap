@@ -28,7 +28,12 @@ void Usage(const char* prog) {
         "  --distance  <value>    search distance (default 30)\n"
         "  --ratio     <value>    uniform mapping ratio (default 1)\n"
         "  --ratio-xyz <x> <y> <z>  per-axis mapping ratio\n"
-        "  --process   <id>       process_id written to the force file\n";
+        "  --process   <id>       process_id written to the force file\n"
+        "  --mode      <m>        mapping mode: nearest (default) | weighted\n"
+        "  --k         <n>        neighbours for weighted mode (default 4)\n"
+        "  --idw-power <p>        inverse-distance exponent (default 2)\n"
+        "  --no-loss              assign out-of-range sources to global nearest\n"
+        "  --conserve             rescale result so total mapped == total applied\n";
 }
 
 std::string Arg(int& i, int argc, char** argv) {
@@ -44,6 +49,7 @@ int main(int argc, char** argv) {
     std::vector<std::string> sets;
     double distance = 30.0;
     vm::Vec3 ratio{1.0, 1.0, 1.0};
+    vm::MapOptions opt;
 
     for (int i = 1; i < argc; ++i) {
         std::string a = argv[i];
@@ -61,6 +67,16 @@ int main(int argc, char** argv) {
             ratio.z = std::stod(Arg(i, argc, argv));
         }
         else if (a == "--process")  processId   = Arg(i, argc, argv);
+        else if (a == "--mode") {
+            std::string m = Arg(i, argc, argv);
+            if      (m == "nearest")  opt.mode = vm::MapMode::SingleNearest;
+            else if (m == "weighted") opt.mode = vm::MapMode::WeightedKNearest;
+            else { std::cerr << "Unknown mode: " << m << "\n"; return 2; }
+        }
+        else if (a == "--k")         opt.k = std::stoi(Arg(i, argc, argv));
+        else if (a == "--idw-power") opt.idwPower = std::stod(Arg(i, argc, argv));
+        else if (a == "--no-loss")   opt.fallbackNearest = true;
+        else if (a == "--conserve")  opt.conserveTotal = true;
         else if (a == "--help" || a == "-h") { Usage(argv[0]); return 0; }
         else { std::cerr << "Unknown option: " << a << "\n"; Usage(argv[0]); return 2; }
     }
@@ -94,19 +110,24 @@ int main(int argc, char** argv) {
     }
 
     vm::Mapper mapper(targets, /*pitch=*/(distance > 50.0 ? distance : 50.0));
-    vm::MappingResult r = mapper.Map(nas, distance, ratio);
+    vm::MappingResult r = mapper.Map(nas, distance, ratio, opt);
     if (mapper.ExportAdxForce(outPath, processId)) {
         std::cerr << "ERROR: cannot write output force file\n";
         return 1;
     }
 
-    const vm::Vec3 totalNas = nas.TotalForce();
     std::printf("Nastran nodes      : %zu\n", nas.nodes().size());
     std::printf("ADX surface nodes  : %zu\n", targets.size());
-    std::printf("Mapped / Lost      : %d / %d\n", r.mappedCount, r.lossCount);
-    std::printf("Total Nastran force: (%.6f, %.6f, %.6f)\n", totalNas.x, totalNas.y, totalNas.z);
-    std::printf("Mapped force       : (%.6f, %.6f, %.6f)\n", r.mappedForce.x, r.mappedForce.y, r.mappedForce.z);
-    std::printf("Lost force         : (%.6f, %.6f, %.6f)\n", r.lossForce.x, r.lossForce.y, r.lossForce.z);
+    std::printf("Mapped / Fallback / Lost : %d / %d / %d\n",
+                r.mappedCount, r.fallbackCount, r.lossCount);
+    std::printf("Applied force      : (%.6f, %.6f, %.6f)\n",
+                r.appliedForce.x, r.appliedForce.y, r.appliedForce.z);
+    std::printf("Mapped force       : (%.6f, %.6f, %.6f)\n",
+                r.mappedForce.x, r.mappedForce.y, r.mappedForce.z);
+    std::printf("Lost force         : (%.6f, %.6f, %.6f)\n",
+                r.lossForce.x, r.lossForce.y, r.lossForce.z);
+    if (r.lossCount > 0)
+        std::printf("Max unmatched dist : %.6f\n", r.maxLossDistance);
     std::printf("Output             : %s\n", outPath.c_str());
     return 0;
 }

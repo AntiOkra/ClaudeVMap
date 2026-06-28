@@ -296,6 +296,90 @@ static void TestDanglingNodeRef() {
 
 // ---------------------------------------------------------------------------
 
+// Build an in-memory Nastran with explicit node coords/forces (bypasses file
+// IO; the Mapper only reads coords and forces).
+static vm::Nastran MakeNastran(const std::vector<std::pair<vm::Vec3, vm::Vec3>>& nodes) {
+    vm::Nastran nas;
+    int id = 1;
+    for (const auto& nc : nodes) {
+        vm::NastranNode n;
+        n.id = id++;
+        n.coord = nc.first;
+        n.force = nc.second;
+        nas.nodes().push_back(n);
+    }
+    return nas;
+}
+
+// Weighted mode distributes a source force across the k nearest targets;
+// per-source force is conserved.
+static void TestWeightedDistribution() {
+    std::printf("[weighted distribution]\n");
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0},  vm::Vec3{}});
+    targets.push_back({2, vm::Vec3{10, 0, 0}, vm::Vec3{}});
+
+    // One source midway between the two targets.
+    vm::Nastran nas = MakeNastran({{vm::Vec3{5, 0, 0}, vm::Vec3{0, 0, 100}}});
+
+    vm::Mapper mapper(targets, 50.0);
+    vm::MapOptions opt;
+    opt.mode = vm::MapMode::WeightedKNearest;
+    opt.k = 4;
+    vm::MappingResult r = mapper.Map(nas, /*distance=*/20.0, vm::Vec3{1, 1, 1}, opt);
+
+    CHECK(Near(mapper.targets()[0].force.z, 50.0), "equidistant: target1 gets half");
+    CHECK(Near(mapper.targets()[1].force.z, 50.0), "equidistant: target2 gets half");
+    CHECK(Near(r.mappedForce.z, 100.0), "weighted total conserved per source");
+    CHECK(r.lossCount == 0, "no loss in weighted mode within range");
+}
+
+// conserveTotal rescales so the total on targets equals the applied total, even
+// when some source force fell outside the search distance.
+static void TestConservation() {
+    std::printf("[conservation re-normalization]\n");
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0}, vm::Vec3{}});
+
+    // One source in range, one far out of range.
+    vm::Nastran nas = MakeNastran({
+        {vm::Vec3{0, 0, 0},     vm::Vec3{0, 0, 100}},   // in range
+        {vm::Vec3{1000, 0, 0},  vm::Vec3{0, 0, 100}},   // out of range -> lost
+    });
+
+    vm::Mapper mapper(targets, 50.0);
+    vm::MapOptions opt;
+    opt.conserveTotal = true;
+    vm::MappingResult r = mapper.Map(nas, /*distance=*/20.0, vm::Vec3{1, 1, 1}, opt);
+
+    CHECK(Near(r.appliedForce.z, 200.0), "applied total == 200");
+    CHECK(Near(mapper.targets()[0].force.z, 200.0), "target rescaled to applied total");
+    CHECK(Near(r.lossForce.z, 0.0), "conserveTotal reports zero loss");
+}
+
+// fallbackNearest assigns out-of-range sources to the global nearest target,
+// so nothing is lost (without rescaling).
+static void TestFallbackNoLoss() {
+    std::printf("[fallback no-loss]\n");
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0}, vm::Vec3{}});
+
+    vm::Nastran nas = MakeNastran({
+        {vm::Vec3{0, 0, 0},    vm::Vec3{0, 0, 100}},
+        {vm::Vec3{1000, 0, 0}, vm::Vec3{0, 0, 100}},
+    });
+
+    vm::Mapper mapper(targets, 50.0);
+    vm::MapOptions opt;
+    opt.fallbackNearest = true;
+    vm::MappingResult r = mapper.Map(nas, /*distance=*/20.0, vm::Vec3{1, 1, 1}, opt);
+
+    CHECK(r.lossCount == 0, "no lost sources with fallback");
+    CHECK(r.fallbackCount == 1, "one source used the fallback");
+    CHECK(Near(mapper.targets()[0].force.z, 200.0), "all force lands on the target");
+    CHECK(r.maxLossDistance > 900.0, "max unmatched distance is reported");
+}
+
 int main() {
     TestGeometry();
     TestAreaMapAdaptiveRange();
@@ -304,6 +388,9 @@ int main() {
     TestExportFilterBugfix();
     TestEndToEndAdx();
     TestDanglingNodeRef();
+    TestWeightedDistribution();
+    TestConservation();
+    TestFallbackNoLoss();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

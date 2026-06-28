@@ -11,6 +11,7 @@
 
 #include <cstdint>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "vm/Vec3.h"
@@ -33,6 +34,10 @@ public:
     // Find the nearest node to p within upr_limit.
     // Returns the node pointer (or nullptr) and the distance found.
     SurfaceNode* NearestNode(const Vec3& p, double upr_limit, double& distance);
+
+    // Collect every node within upr_limit of p, paired with its distance.
+    void NodesInRange(const Vec3& p, double upr_limit,
+                      std::vector<std::pair<SurfaceNode*, double>>& out);
 
     double pitch() const { return pitch_; }
     bool   empty() const { return cells_.empty(); }
