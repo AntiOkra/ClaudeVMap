@@ -58,6 +58,12 @@ public:
     int  ExtractSurfaceNodes(const std::vector<std::string>& setNames,
                              std::vector<SurfaceNode>& out) const;
 
+    // Same, but also return the surface triangles (corner nodes only),
+    // referencing the produced node array by index. Used for face projection.
+    int  ExtractSurface(const std::vector<std::string>& setNames,
+                        std::vector<SurfaceNode>& outNodes,
+                        std::vector<TargetFace>& outFaces) const;
+
     const std::vector<AdxElementSet>& elementSets() const { return elementSets_; }
 
 private:

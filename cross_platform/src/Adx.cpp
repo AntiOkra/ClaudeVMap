@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include <set>
 
 namespace vm {
 
@@ -267,6 +268,50 @@ int Adx::ExtractSurfaceNodes(const std::vector<std::string>& setNames,
         s.coord = n.coord;
         s.force = Vec3{0.0, 0.0, 0.0};
         out.push_back(s);
+    }
+    return 0;
+}
+
+int Adx::ExtractSurface(const std::vector<std::string>& setNames,
+                        std::vector<SurfaceNode>& outNodes,
+                        std::vector<TargetFace>& outFaces) const {
+    std::map<int, int> nodeMap;   // adx node index -> target index (assigned below)
+    std::set<int>      faceSet;   // unique surface face indices
+
+    for (const auto& name : setNames) {
+        std::vector<int> vnode, vface;
+        SurfaceExtract(name, vnode, vface);
+        for (int idx : vnode) nodeMap[idx] = 0;
+        for (int fi : vface)  faceSet.insert(fi);
+    }
+
+    // Assign target indices in ascending adx-node-index order and emit nodes.
+    outNodes.clear();
+    outNodes.reserve(nodeMap.size());
+    int idx = 0;
+    for (auto& kv : nodeMap) {
+        kv.second = idx++;
+        const AdxNode& n = nodes_[kv.first];
+        SurfaceNode s;
+        s.id = n.id;
+        s.coord = n.coord;
+        s.force = Vec3{0.0, 0.0, 0.0};
+        outNodes.push_back(s);
+    }
+
+    // Emit triangles using the three corner nodes (face nodeIndex[0..2]).
+    outFaces.clear();
+    outFaces.reserve(faceSet.size());
+    for (int fi : faceSet) {
+        const AdxElementFace& f = faces_[fi];
+        TargetFace tf;
+        bool ok = true;
+        for (int k = 0; k < 3; ++k) {
+            auto it = nodeMap.find(f.nodeIndex[k]);
+            if (it == nodeMap.end()) { ok = false; break; }
+            tf.n[k] = it->second;
+        }
+        if (ok) outFaces.push_back(tf);
     }
     return 0;
 }

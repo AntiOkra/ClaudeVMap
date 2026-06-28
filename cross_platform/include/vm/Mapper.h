@@ -25,7 +25,7 @@
 
 namespace vm {
 
-enum class MapMode { SingleNearest, WeightedKNearest };
+enum class MapMode { SingleNearest, WeightedKNearest, FaceProjection };
 
 struct MapOptions {
     MapMode mode            = MapMode::SingleNearest;
@@ -49,6 +49,10 @@ class Mapper {
 public:
     Mapper(std::vector<SurfaceNode>& targets, double pitch = 0.0);
 
+    // Supply the surface triangles required by MapMode::FaceProjection.
+    // Builds an internal grid over the face centroids.
+    void SetFaces(std::vector<TargetFace> faces);
+
     MappingResult Map(const Nastran& nas, double searchDistance, const Vec3& ratio,
                       const MapOptions& opt = MapOptions{});
 
@@ -58,9 +62,17 @@ public:
 
 private:
     SurfaceNode* GlobalNearest(const Vec3& p, double& distance);
+    // Distribute mapForce onto the nearest face within searchDistance.
+    // Returns true if a face was found.
+    bool ProjectOntoFace(const Vec3& p, const Vec3& mapForce, double searchDistance);
 
     std::vector<SurfaceNode>& targets_;
     AreaMap                   areaMap_;
+
+    std::vector<TargetFace>   faces_;
+    std::vector<SurfaceNode>  centroids_;   // one per face (id = face index)
+    AreaMap                   centroidMap_;
+    double                    maxFaceExtent_ = 0.0;
 };
 
 } // namespace vm

@@ -29,7 +29,7 @@ void Usage(const char* prog) {
         "  --ratio     <value>    uniform mapping ratio (default 1)\n"
         "  --ratio-xyz <x> <y> <z>  per-axis mapping ratio\n"
         "  --process   <id>       process_id written to the force file\n"
-        "  --mode      <m>        mapping mode: nearest (default) | weighted\n"
+        "  --mode      <m>        mapping mode: nearest (default) | weighted | projection\n"
         "  --k         <n>        neighbours for weighted mode (default 4)\n"
         "  --idw-power <p>        inverse-distance exponent (default 2)\n"
         "  --no-loss              assign out-of-range sources to global nearest\n"
@@ -69,8 +69,9 @@ int main(int argc, char** argv) {
         else if (a == "--process")  processId   = Arg(i, argc, argv);
         else if (a == "--mode") {
             std::string m = Arg(i, argc, argv);
-            if      (m == "nearest")  opt.mode = vm::MapMode::SingleNearest;
-            else if (m == "weighted") opt.mode = vm::MapMode::WeightedKNearest;
+            if      (m == "nearest")    opt.mode = vm::MapMode::SingleNearest;
+            else if (m == "weighted")   opt.mode = vm::MapMode::WeightedKNearest;
+            else if (m == "projection") opt.mode = vm::MapMode::FaceProjection;
             else { std::cerr << "Unknown mode: " << m << "\n"; return 2; }
         }
         else if (a == "--k")         opt.k = std::stoi(Arg(i, argc, argv));
@@ -103,13 +104,21 @@ int main(int argc, char** argv) {
     }
 
     std::vector<vm::SurfaceNode> targets;
-    adx.ExtractSurfaceNodes(sets, targets);
+    std::vector<vm::TargetFace>  faces;
+    adx.ExtractSurface(sets, targets, faces);
     if (targets.empty()) {
         std::cerr << "ERROR: no surface nodes extracted for the selected sets\n";
         return 1;
     }
 
     vm::Mapper mapper(targets, /*pitch=*/(distance > 50.0 ? distance : 50.0));
+    if (opt.mode == vm::MapMode::FaceProjection) {
+        if (faces.empty()) {
+            std::cerr << "ERROR: no surface faces available for projection mode\n";
+            return 1;
+        }
+        mapper.SetFaces(faces);
+    }
     vm::MappingResult r = mapper.Map(nas, distance, ratio, opt);
     if (mapper.ExportAdxForce(outPath, processId)) {
         std::cerr << "ERROR: cannot write output force file\n";

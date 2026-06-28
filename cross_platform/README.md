@@ -56,6 +56,7 @@ CLI:
 |---|---|
 | `--mode nearest` | 従来通り、最近傍 1 点へ全荷重(既定) |
 | `--mode weighted` | 探索距離内の **k 近傍へ逆距離重み付き分配**(源ごとに保存) |
+| `--mode projection` | 最近傍の**表面三角形へ投影し、面積座標(重心座標)で 3 頂点へ分配**。空間的に最も正確で、源ごとに厳密保存(CAE 標準の consistent load transfer) |
 | `--k <n>` | weighted の近傍数(既定 4) |
 | `--idw-power <p>` | 逆距離の指数(既定 2) |
 | `--no-loss` | 範囲内に対象が無い荷重を**全体最近傍へフォールバック**(消失ゼロ) |
@@ -105,21 +106,27 @@ CLI:
 従来は「各 Nastran ノードの荷重を最近傍 ADX ノード **1 点**へ全部加算」する
 方式で、(a) 探索距離外の荷重は**消失**して**合計が保存されない**、
 (b) メッシュ密度差で**空間的に偏る**、という弱点がありました。移植コアでは
-上記の `weighted` / `--no-loss` / `--conserve` を追加し、保存的な荷重移送を
-選べるようにしています(既定は後方互換の単一最近傍)。
-`TestWeightedDistribution` / `TestConservation` / `TestFallbackNoLoss` で検証。
+上記の `weighted` / `projection` / `--no-loss` / `--conserve` を追加し、
+保存的な荷重移送を選べるようにしています(既定は後方互換の単一最近傍)。
+
+特に `projection`(面投影 + 重心座標補間)は、源ノードを最近傍の表面三角形へ
+投影し、面積座標で 3 頂点へ分配します。重みの和が 1 のため**源ごとに荷重を
+厳密保存**し、ノード集中や飛び地への漏れが起きにくい、CAE 標準の方式です。
+
+`TestWeightedDistribution` / `TestConservation` / `TestFallbackNoLoss` /
+`TestFaceProjection` / `TestFaceProjectionNearVertex` で検証。
 
 ### テスト
 
 `tests/test_core.cpp` に幾何計算・荷重計算・最近傍探索・出力フィルタ・
-荷重保存・ADX 読込〜マッピングのエンドツーエンドまで含む 46 件のチェックが
-あります。
+荷重保存・面投影補間・ADX 読込〜マッピングのエンドツーエンドまで含む
+54 件のチェックがあります。
 
 ## ディレクトリ構成
 
 ```
 cross_platform/
-├── include/vm/   ヘッダ(Vec3, StringUtil, AreaMap, Nastran, Adx, Mapper)
+├── include/vm/   ヘッダ(Vec3, Geometry, StringUtil, AreaMap, Nastran, Adx, Mapper)
 ├── src/          実装 + CLI(cli_main.cpp)
 ├── tests/        単体・結合テスト
 └── CMakeLists.txt

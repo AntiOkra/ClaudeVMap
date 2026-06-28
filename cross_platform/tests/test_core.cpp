@@ -380,6 +380,65 @@ static void TestFallbackNoLoss() {
     CHECK(r.maxLossDistance > 900.0, "max unmatched distance is reported");
 }
 
+// Face projection: a source above a triangle distributes to its corners by
+// barycentric weights and conserves total force.
+static void TestFaceProjection() {
+    std::printf("[face projection]\n");
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0},  vm::Vec3{}});
+    targets.push_back({2, vm::Vec3{10, 0, 0}, vm::Vec3{}});
+    targets.push_back({3, vm::Vec3{0, 10, 0}, vm::Vec3{}});
+    std::vector<vm::TargetFace> faces;
+    faces.push_back({{0, 1, 2}});
+
+    // Source above the triangle centroid (10/3,10/3,0), 5 units up in Z.
+    vm::Nastran nas = MakeNastran({
+        {vm::Vec3{10.0 / 3.0, 10.0 / 3.0, 5.0}, vm::Vec3{0, 0, 90}}
+    });
+
+    vm::Mapper mapper(targets, 50.0);
+    mapper.SetFaces(faces);
+    vm::MapOptions opt;
+    opt.mode = vm::MapMode::FaceProjection;
+    vm::MappingResult r = mapper.Map(nas, /*distance=*/20.0, vm::Vec3{1, 1, 1}, opt);
+
+    CHECK(r.lossCount == 0, "projection found the face");
+    CHECK(Near(mapper.targets()[0].force.z, 30.0, 1e-6), "centroid: corner1 gets a third");
+    CHECK(Near(mapper.targets()[1].force.z, 30.0, 1e-6), "centroid: corner2 gets a third");
+    CHECK(Near(mapper.targets()[2].force.z, 30.0, 1e-6), "centroid: corner3 gets a third");
+
+    double sum = mapper.targets()[0].force.z + mapper.targets()[1].force.z +
+                 mapper.targets()[2].force.z;
+    CHECK(Near(sum, 90.0, 1e-6), "projection conserves total force");
+}
+
+// A source near one corner sends almost all force to that corner.
+static void TestFaceProjectionNearVertex() {
+    std::printf("[face projection near vertex]\n");
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0},  vm::Vec3{}});
+    targets.push_back({2, vm::Vec3{10, 0, 0}, vm::Vec3{}});
+    targets.push_back({3, vm::Vec3{0, 10, 0}, vm::Vec3{}});
+    std::vector<vm::TargetFace> faces;
+    faces.push_back({{0, 1, 2}});
+
+    vm::Nastran nas = MakeNastran({
+        {vm::Vec3{0.1, 0.1, 1.0}, vm::Vec3{0, 0, 100}}
+    });
+
+    vm::Mapper mapper(targets, 50.0);
+    mapper.SetFaces(faces);
+    vm::MapOptions opt;
+    opt.mode = vm::MapMode::FaceProjection;
+    mapper.Map(nas, 20.0, vm::Vec3{1, 1, 1}, opt);
+
+    CHECK(mapper.targets()[0].force.z > 90.0, "near-corner: most force on corner1");
+    CHECK(mapper.targets()[1].force.z < 5.0,  "near-corner: little on corner2");
+    double sum = mapper.targets()[0].force.z + mapper.targets()[1].force.z +
+                 mapper.targets()[2].force.z;
+    CHECK(Near(sum, 100.0, 1e-6), "near-corner: still conserved");
+}
+
 int main() {
     TestGeometry();
     TestAreaMapAdaptiveRange();
@@ -391,6 +450,8 @@ int main() {
     TestWeightedDistribution();
     TestConservation();
     TestFallbackNoLoss();
+    TestFaceProjection();
+    TestFaceProjectionNearVertex();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

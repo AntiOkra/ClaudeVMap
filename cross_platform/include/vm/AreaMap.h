@@ -25,6 +25,12 @@ struct SurfaceNode {
     Vec3 force;
 };
 
+// A surface triangle referencing three corner nodes by their index into the
+// mapper's target-node array (used by the face-projection mapping mode).
+struct TargetFace {
+    int n[3] = {-1, -1, -1};
+};
+
 class AreaMap {
 public:
     // Build the grid over the given nodes. The pitch defaults to a sensible
