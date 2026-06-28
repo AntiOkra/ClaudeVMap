@@ -23,10 +23,60 @@ int Nastran::ReadMeshFile(const std::string& path, std::string* log) {
         return 1;
     }
 
+    // Helper: build an element from already-split fields (free or small field).
+    // fields[0]=card, [1]=id, [2]=pid, [3..]=node ids.
+    auto elementFromFields = [&](const std::string& type,
+                                 const std::vector<std::string>& f) -> bool {
+        if (f.size() < 4) return false;
+        NastranElement e;
+        e.id = ParseInt(f[1]);
+        auto fid = [&](std::size_t i) { return (i < f.size()) ? ParseInt(f[i]) : -1; };
+        if (type == "CTRIA3") {
+            e.type = ElemType::CTRIA3;
+            e.nodeId[0] = fid(3); e.nodeId[1] = fid(4); e.nodeId[2] = fid(5); e.nodeId[3] = -1;
+        } else if (type == "CQUAD4") {
+            if (f.size() < 7) return false;
+            e.type = ElemType::CQUAD4;
+            e.nodeId[0] = fid(3); e.nodeId[1] = fid(4); e.nodeId[2] = fid(5); e.nodeId[3] = fid(6);
+        } else { // CBEAM
+            e.type = ElemType::CBEAM;
+            e.nodeId[0] = fid(3); e.nodeId[1] = fid(4); e.nodeId[2] = -1; e.nodeId[3] = -1;
+        }
+        elements_.push_back(e);
+        return true;
+    };
+
     std::string line;
     int line_count = 0;
+    int skipped = 0;
     while (std::getline(in, line)) {
         ++line_count;
+
+        const std::string trimmed = Trim(line);
+        if (trimmed.empty() || trimmed[0] == '$') continue;  // blank / comment
+
+        const bool freeFormat = line.find(',') != std::string::npos;
+
+        if (freeFormat) {
+            // Free format: comma-separated fields (GRID/elements, short form).
+            std::vector<std::string> f = Split(line, ",");
+            for (auto& s : f) s = Trim(s);
+            if (f.empty()) { ++skipped; continue; }
+            const std::string card = f[0];
+            if (card == "GRID" && f.size() >= 6) {
+                NastranNode n;
+                n.id = ParseInt(f[1]);
+                n.coord.x = ParseDouble(f[3]);
+                n.coord.y = ParseDouble(f[4]);
+                n.coord.z = ParseDouble(f[5]);
+                nodes_.push_back(n);
+            } else if (card == "CTRIA3" || card == "CQUAD4" || card == "CBEAM") {
+                if (!elementFromFields(card, f)) ++skipped;
+            } else {
+                ++skipped;
+            }
+            continue;
+        }
 
         if (StartsWith(line, "GRID*")) {
             std::string line2;
@@ -37,14 +87,23 @@ int Nastran::ReadMeshFile(const std::string& path, std::string* log) {
             }
             ++line_count;
             NastranNode n;
-            // Fixed-column layout, identical to CNastranNode::Read.
+            // Fixed-column long-format layout, identical to CNastranNode::Read.
             n.id      = ParseInt   (SafeMid(line, 16, 8));
             n.coord.x = ParseDouble(SafeMid(line, 40, 16));
             n.coord.y = ParseDouble(SafeMid(line, 56, 16));
             n.coord.z = ParseDouble(SafeMid(line2, 8, 16));
             nodes_.push_back(n);
+        } else if (StartsWith(line, "GRID")) {
+            // Small-field (8-column) GRID: id at 8, x/y/z at 24/32/40.
+            NastranNode n;
+            n.id      = ParseInt   (SafeMid(line, 8, 8));
+            n.coord.x = ParseDouble(SafeMid(line, 24, 8));
+            n.coord.y = ParseDouble(SafeMid(line, 32, 8));
+            n.coord.z = ParseDouble(SafeMid(line, 40, 8));
+            nodes_.push_back(n);
         } else if (StartsWith(line, "CTRIA3") || StartsWith(line, "CQUAD4") ||
                    StartsWith(line, "CBEAM")) {
+            // Small-field (8-column) element layout.
             NastranElement e;
             const std::string type = Trim(SafeMid(line, 0, 6));
             e.id = ParseInt(SafeMid(line, 8, 8));
@@ -68,7 +127,14 @@ int Nastran::ReadMeshFile(const std::string& path, std::string* log) {
                 e.nodeId[3] = -1;
             }
             elements_.push_back(e);
+        } else {
+            ++skipped;  // unrecognised non-comment card
         }
+    }
+
+    if (skipped > 0) {
+        Log(log, "INFO: skipped " + std::to_string(skipped) +
+                 " unrecognised mesh line(s)\n");
     }
 
     return Indexing(log);
@@ -76,8 +142,17 @@ int Nastran::ReadMeshFile(const std::string& path, std::string* log) {
 
 int Nastran::Indexing(std::string* log) {
     nodeIdToIndex_.clear();
+    int dupNodes = 0;
     for (int i = 0; i < static_cast<int>(nodes_.size()); ++i) {
-        nodeIdToIndex_[nodes_[i].id] = i;
+        auto res = nodeIdToIndex_.insert({nodes_[i].id, i});
+        if (!res.second) {
+            ++dupNodes;
+            res.first->second = i;  // keep the last definition, but flag it
+        }
+    }
+    if (dupNodes > 0) {
+        Log(log, "WARNING: " + std::to_string(dupNodes) +
+                 " duplicate node ID(s); the last definition wins\n");
     }
     elemIdToIndex_.clear();
     for (int i = 0; i < static_cast<int>(elements_.size()); ++i) {
@@ -117,22 +192,21 @@ int Nastran::ReadVectorFile(const std::string& path, bool tangent, std::string* 
         return 1;
     }
 
+    // The original skipped a fixed 9-line header. Instead, auto-detect data
+    // lines: a data line is exactly "<int> <num> <num> <num>". Anything else
+    // (headers of any length, blanks, comments) is skipped. This removes the
+    // magic header count and is backward compatible.
     std::string line;
     int line_count = 0;
-    // Skip 9 header lines (matches the original).
-    for (int i = 0; i < 9; ++i) {
-        ++line_count;
-        if (!std::getline(in, line)) {
-            Log(log, "ERROR: pressure file too short (header) near line " +
-                     std::to_string(line_count) + "\n");
-            return 1;
-        }
-    }
-
+    int applied = 0;
     while (std::getline(in, line)) {
         ++line_count;
-        auto words = Split(line, " ");
+        auto words = Split(line, " \t");
         if (words.size() != 4) continue;
+        if (!IsInteger(words[0]) || !IsNumber(words[1]) ||
+            !IsNumber(words[2]) || !IsNumber(words[3])) {
+            continue;  // header or non-data line
+        }
 
         const int id = ParseInt(words[0]);
         auto it = nodeIdToIndex_.find(id);
@@ -146,6 +220,10 @@ int Nastran::ReadVectorFile(const std::string& path, bool tangent, std::string* 
         target.x = ParseDouble(words[1]);
         target.y = ParseDouble(words[2]);
         target.z = ParseDouble(words[3]);
+        ++applied;
+    }
+    if (applied == 0) {
+        Log(log, "WARNING: no pressure data lines found in " + path + "\n");
     }
     return 0;
 }

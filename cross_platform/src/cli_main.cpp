@@ -35,7 +35,11 @@ void Usage(const char* prog) {
         "  --idw-power <p>        inverse-distance exponent (default 2)\n"
         "  --samples   <n>        edge subdivisions per source element for sampled (default 3)\n"
         "  --no-loss              assign out-of-range sources to global nearest\n"
-        "  --conserve             rescale result so total mapped == total applied\n";
+        "  --conserve             rescale result so total mapped == total applied\n"
+        "  --conserve-moment      add a correction so total moment is also preserved\n"
+        "  --normal-filter <deg>  projection/sampled: reject faces whose normal is\n"
+        "                         more than <deg> from the source normal\n"
+        "  --normal-flip          invert the source normal used by --normal-filter\n";
 }
 
 std::string Arg(int& i, int argc, char** argv) {
@@ -82,6 +86,9 @@ int main(int argc, char** argv) {
         else if (a == "--samples")   opt.sampleLevel = std::stoi(Arg(i, argc, argv));
         else if (a == "--no-loss")   opt.fallbackNearest = true;
         else if (a == "--conserve")  opt.conserveTotal = true;
+        else if (a == "--conserve-moment") opt.conserveMoment = true;
+        else if (a == "--normal-filter") { opt.normalFilter = true; opt.normalMaxAngleDeg = std::stod(Arg(i, argc, argv)); }
+        else if (a == "--normal-flip")     opt.normalFlip = true;
         else if (a == "--help" || a == "-h") { Usage(argv[0]); return 0; }
         else { std::cerr << "Unknown option: " << a << "\n"; Usage(argv[0]); return 2; }
     }
@@ -142,6 +149,10 @@ int main(int argc, char** argv) {
                 r.lossForce.x, r.lossForce.y, r.lossForce.z);
     if (r.lossCount > 0)
         std::printf("Max unmatched dist : %.6f\n", r.maxLossDistance);
+    std::printf("Applied moment     : (%.6f, %.6f, %.6f)\n",
+                r.appliedMoment.x, r.appliedMoment.y, r.appliedMoment.z);
+    std::printf("Mapped moment      : (%.6f, %.6f, %.6f)\n",
+                r.mappedMoment.x, r.mappedMoment.y, r.mappedMoment.z);
     std::printf("Output             : %s\n", outPath.c_str());
     return 0;
 }

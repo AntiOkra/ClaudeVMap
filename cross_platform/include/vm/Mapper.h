@@ -33,17 +33,32 @@ struct MapOptions {
     double  idwPower        = 2.0;   // inverse-distance exponent
     bool    fallbackNearest = false; // assign out-of-range sources to global nearest
     bool    conserveTotal   = false; // rescale so total mapped == total applied
+    bool    conserveMoment  = false; // add a self-equilibrated correction so the
+                                     // total moment also matches the applied one
     int     sampleLevel     = 3;     // SourceSampled: edge subdivisions per element
+    bool    normalFilter    = false; // projection: reject faces facing the wrong way
+    double  normalMaxAngleDeg = 90.0;// acceptance half-angle for normalFilter
+    bool    normalFlip      = false; // invert the source normal used for filtering
 };
 
 struct MappingResult {
     Vec3 appliedForce;  // total source force after the ratio
     Vec3 mappedForce;   // total force placed on targets (before conserveTotal)
     Vec3 lossForce;     // total force with no target (after fallback)
+    Vec3 appliedMoment; // total applied moment about the target centroid
+    Vec3 mappedMoment;  // total mapped moment about the target centroid (final)
     int  mappedCount = 0;
     int  lossCount   = 0;
     int  fallbackCount = 0;
     double maxLossDistance = 0.0; // farthest unmatched source's nearest target
+};
+
+// One unit of source load to place: a point, its force, and the source surface
+// normal (unit; zero if unknown) used by the normal-alignment filter.
+struct Sample {
+    Vec3 pos;
+    Vec3 force;
+    Vec3 dir;
 };
 
 class Mapper {
@@ -64,16 +79,19 @@ public:
 private:
     SurfaceNode* GlobalNearest(const Vec3& p, double& distance);
     // Distribute mapForce onto the nearest face within searchDistance.
-    // Returns true if a face was found.
-    bool ProjectOntoFace(const Vec3& p, const Vec3& mapForce, double searchDistance);
-    // Place one (point, force) sample using the mode's placement rule, updating
-    // the running result (counters and accumulated forces).
-    void PlaceForce(const Vec3& p, const Vec3& force, double searchDistance,
+    // With normalFilter, faces whose normal is not aligned with srcDir are
+    // rejected. Returns true if a face was found.
+    bool ProjectOntoFace(const Vec3& p, const Vec3& mapForce, const Vec3& srcDir,
+                         double searchDistance, const MapOptions& opt);
+    // Place one sample using the mode's placement rule, updating the running
+    // result (counters and accumulated forces).
+    void PlaceForce(const Sample& s, double searchDistance,
                     const MapOptions& opt, MappingResult& res);
-    // Build the (point, force) samples to distribute. For SourceSampled this
-    // subdivides each source element; otherwise it is one sample per source node.
+    // Build the samples to distribute. For SourceSampled this subdivides each
+    // source element; otherwise it is one sample per source node.
     void GenerateSamples(const Nastran& nas, const Vec3& ratio, const MapOptions& opt,
-                         std::vector<std::pair<Vec3, Vec3>>& out) const;
+                         std::vector<Sample>& out) const;
+    Vec3 TargetCentroid() const;
 
     std::vector<SurfaceNode>& targets_;
     AreaMap                   areaMap_;

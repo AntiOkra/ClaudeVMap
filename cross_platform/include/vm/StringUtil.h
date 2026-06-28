@@ -3,6 +3,7 @@
 // parsing, whitespace tokenisation).
 #pragma once
 
+#include <cctype>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -35,6 +36,26 @@ inline std::string Trim(const std::string& s) {
 
 inline bool StartsWith(const std::string& s, const std::string& prefix) {
     return s.size() >= prefix.size() && s.compare(0, prefix.size(), prefix) == 0;
+}
+
+// True if the trimmed string is a base-10 integer (optionally signed).
+inline bool IsInteger(const std::string& s) {
+    const std::string t = Trim(s);
+    if (t.empty()) return false;
+    std::size_t i = (t[0] == '+' || t[0] == '-') ? 1 : 0;
+    if (i >= t.size()) return false;
+    for (; i < t.size(); ++i)
+        if (!std::isdigit(static_cast<unsigned char>(t[i]))) return false;
+    return true;
+}
+
+// True if the trimmed string parses fully as a floating-point number.
+inline bool IsNumber(const std::string& s) {
+    const std::string t = Trim(s);
+    if (t.empty()) return false;
+    char* end = nullptr;
+    std::strtod(t.c_str(), &end);
+    return end == t.c_str() + t.size();
 }
 
 // Split on any of the delimiter characters, dropping empty tokens.

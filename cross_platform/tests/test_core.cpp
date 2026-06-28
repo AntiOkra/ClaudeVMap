@@ -509,6 +509,163 @@ static void TestSampledCoarseToFine() {
           "sampled distribution is smoother than per-node projection");
 }
 
+// Moment conservation: the lumped mapping leaves a moment error; the
+// correction restores the applied moment while keeping the total force.
+static void TestMomentConservation() {
+    std::printf("[moment conservation]\n");
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0},  vm::Vec3{}});
+    targets.push_back({2, vm::Vec3{10, 0, 0}, vm::Vec3{}});
+
+    // Source at x=3 (off the target centroid x=5) -> nearest puts all on
+    // target1 at x=0, creating a moment mismatch.
+    vm::Nastran nas = MakeNastran({{vm::Vec3{3, 0, 0}, vm::Vec3{0, 0, 90}}});
+
+    vm::Mapper mapper(targets, 50.0);
+    vm::MapOptions opt;
+    opt.mode = vm::MapMode::SingleNearest;
+    opt.conserveMoment = true;
+    vm::MappingResult r = mapper.Map(nas, 20.0, vm::Vec3{1, 1, 1}, opt);
+
+    // Total force still conserved.
+    double fz = mapper.targets()[0].force.z + mapper.targets()[1].force.z;
+    CHECK(Near(fz, 90.0, 1e-6), "moment correction keeps total force");
+    // Mapped moment now equals applied moment.
+    CHECK(Near(r.mappedMoment.x, r.appliedMoment.x, 1e-6) &&
+          Near(r.mappedMoment.y, r.appliedMoment.y, 1e-6) &&
+          Near(r.mappedMoment.z, r.appliedMoment.z, 1e-6),
+          "mapped moment == applied moment after correction");
+}
+
+// Normal-alignment filter: a source between two opposite-facing faces is
+// mapped to the face whose normal matches the source direction, even when the
+// other face is geometrically closer.
+static void TestNormalFilter() {
+    std::printf("[normal filter]\n");
+    // Bottom face at z=0 wound to face -z; top face at z=2 wound to face +z.
+    std::vector<vm::SurfaceNode> targets;
+    targets.push_back({1, vm::Vec3{0, 0, 0}, vm::Vec3{}});  // 0 bottom
+    targets.push_back({2, vm::Vec3{0, 1, 0}, vm::Vec3{}});  // 1 bottom
+    targets.push_back({3, vm::Vec3{1, 0, 0}, vm::Vec3{}});  // 2 bottom
+    targets.push_back({4, vm::Vec3{0, 0, 2}, vm::Vec3{}});  // 3 top
+    targets.push_back({5, vm::Vec3{1, 0, 2}, vm::Vec3{}});  // 4 top
+    targets.push_back({6, vm::Vec3{0, 1, 2}, vm::Vec3{}});  // 5 top
+    std::vector<vm::TargetFace> faces;
+    faces.push_back({{0, 1, 2}});   // normal -z
+    faces.push_back({{3, 4, 5}});   // normal +z
+
+    auto bottomZ = [](const std::vector<vm::SurfaceNode>& t) {
+        return t[0].force.z + t[1].force.z + t[2].force.z;
+    };
+    auto topZ = [](const std::vector<vm::SurfaceNode>& t) {
+        return t[3].force.z + t[4].force.z + t[5].force.z;
+    };
+
+    // Source near the bottom face (z=0.4) but pushing +z: should map to TOP.
+    vm::Nastran nas = MakeNastran({{vm::Vec3{0.2, 0.2, 0.4}, vm::Vec3{0, 0, 10}}});
+
+    // Without the filter -> nearest face is the bottom one.
+    {
+        std::vector<vm::SurfaceNode> t = targets;
+        vm::Mapper m(t, 50.0); m.SetFaces(faces);
+        vm::MapOptions opt; opt.mode = vm::MapMode::FaceProjection;
+        m.Map(nas, 5.0, vm::Vec3{1, 1, 1}, opt);
+        CHECK(topZ(m.targets()) == 0.0 && bottomZ(m.targets()) > 9.0,
+              "without filter: maps to the nearer (bottom) face");
+    }
+    // With the filter and source dir +z -> maps to the top face.
+    {
+        std::vector<vm::SurfaceNode> t = targets;
+        vm::Mapper m(t, 50.0); m.SetFaces(faces);
+        vm::MapOptions opt; opt.mode = vm::MapMode::FaceProjection;
+        opt.normalFilter = true; opt.normalMaxAngleDeg = 80.0;
+        m.Map(nas, 5.0, vm::Vec3{1, 1, 1}, opt);
+        CHECK(bottomZ(m.targets()) == 0.0 && topZ(m.targets()) > 9.0,
+              "with filter: maps to the aligned (top) face");
+    }
+}
+
+// Input robustness: free-format (comma) and small-field GRID, variable-length
+// pressure headers, and duplicate-node detection.
+static void TestInputRobustness() {
+    std::printf("[input robustness]\n");
+
+    // Free format (comma) mesh.
+    {
+        const std::string mesh = TmpPath("free.nas");
+        WriteFile(mesh,
+            "$ free format\n"
+            "GRID,1,0,0.0,0.0,0.0\n"
+            "GRID,2,0,3.0,0.0,0.0\n"
+            "GRID,3,0,0.0,4.0,0.0\n"
+            "CTRIA3,100,7,1,2,3\n");
+        std::string log;
+        vm::Nastran nas;
+        CHECK(nas.ReadMeshFile(mesh, &log) == 0, "free-format mesh reads");
+        CHECK(nas.nodes().size() == 3 && nas.elements().size() == 1,
+              "free-format nodes/elements counted");
+    }
+
+    // Small-field (8-column) GRID.
+    {
+        const std::string mesh = TmpPath("small.nas");
+        // GRID + id@8 + cp@16 + x@24 + y@32 + z@40, each 8 wide.
+        char g[128];
+        std::string m;
+        std::snprintf(g, sizeof(g), "GRID    %-8d%-8s%-8.1f%-8.1f%-8.1f", 1, "", 0.0, 0.0, 0.0);
+        m += std::string(g) + "\n";
+        std::snprintf(g, sizeof(g), "GRID    %-8d%-8s%-8.1f%-8.1f%-8.1f", 2, "", 3.0, 0.0, 0.0);
+        m += std::string(g) + "\n";
+        std::snprintf(g, sizeof(g), "GRID    %-8d%-8s%-8.1f%-8.1f%-8.1f", 3, "", 0.0, 4.0, 0.0);
+        m += std::string(g) + "\n";
+        WriteFile(TmpPath("small.nas"), m);
+        std::string log;
+        vm::Nastran nas;
+        CHECK(nas.ReadMeshFile(TmpPath("small.nas"), &log) == 0, "small-field GRID reads");
+        CHECK(nas.nodes().size() == 3, "small-field nodes counted");
+        CHECK(Near(nas.nodes()[1].coord.x, 3.0), "small-field coord parsed");
+    }
+
+    // Pressure header of a non-standard length is auto-skipped.
+    {
+        const std::string mesh = TmpPath("ph.nas");
+        std::string m;
+        m += GridLine(1, 0, 0, 0);
+        m += GridLine(2, 3, 0, 0);
+        m += GridLine(3, 0, 4, 0);
+        m += Ctria3Line(100, 1, 2, 3);
+        WriteFile(mesh, m);
+
+        std::string norm;            // only 3 header lines, not 9
+        norm += "title line\n# comment\n\n";
+        norm += "1 0 0 1\n2 0 0 1\n3 0 0 1\n";
+        WriteFile(TmpPath("ph_n.txt"), norm);
+        WriteFile(TmpPath("ph_t.txt"), "h\n1 0 0 0\n2 0 0 0\n3 0 0 0\n");
+
+        std::string log;
+        vm::Nastran nas;
+        CHECK(nas.ReadMeshFile(mesh, &log) == 0, "ph mesh ok");
+        CHECK(nas.ReadNormalVectorFile(TmpPath("ph_n.txt"), &log) == 0, "variable header ok");
+        CHECK(nas.ReadTangentVectorFile(TmpPath("ph_t.txt"), &log) == 0, "variable header ok 2");
+        nas.ForceCalc();
+        CHECK(Near(nas.TotalForce().z, 6000.0, 1e-3), "pressure applied past header");
+    }
+
+    // Duplicate node IDs are reported.
+    {
+        const std::string mesh = TmpPath("dup.nas");
+        std::string m;
+        m += GridLine(1, 0, 0, 0);
+        m += GridLine(1, 5, 0, 0);  // duplicate id 1
+        WriteFile(mesh, m);
+        std::string log;
+        vm::Nastran nas;
+        nas.ReadMeshFile(mesh, &log);
+        CHECK(log.find("duplicate node ID") != std::string::npos,
+              "duplicate node IDs reported");
+    }
+}
+
 int main() {
     TestGeometry();
     TestAreaMapAdaptiveRange();
@@ -523,6 +680,9 @@ int main() {
     TestFaceProjection();
     TestFaceProjectionNearVertex();
     TestSampledCoarseToFine();
+    TestMomentConservation();
+    TestNormalFilter();
+    TestInputRobustness();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;
