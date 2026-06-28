@@ -1,0 +1,49 @@
+name: CI
+
+# Builds and tests the cross-platform core (cross_platform/) on Linux (gcc and
+# clang) and Windows (MSVC). The MFC GUI (VectorMapping/) is Windows/MFC-only
+# and is not built here.
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  build-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-gcc
+            os: ubuntu-latest
+            cc: gcc
+            cxx: g++
+          - name: linux-clang
+            os: ubuntu-latest
+            cc: clang
+            cxx: clang++
+          - name: windows-msvc
+            os: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+        run: cmake -S cross_platform -B cross_platform/build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        run: cmake -S cross_platform -B cross_platform/build
+
+      - name: Build
+        run: cmake --build cross_platform/build --config Release -j
+
+      - name: Test
+        run: ctest --test-dir cross_platform/build -C Release --output-on-failure

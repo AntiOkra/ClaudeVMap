@@ -10,17 +10,17 @@ CSurfaceNode::CSurfaceNode()
 
 CSurfaceNode::~CSurfaceNode()
 {
-	for (int i = 0; i < m_vNode.size(); i++) {
-		CAdxNode* p_node = m_vNode[i];
-		delete p_node;
-	}
-
 	m_AreaMap.RemoveAll();
 }
 
 int CSurfaceNode::MakeAreaMap()
 {
-	m_AreaMap.MakeAreaMap(m_vNode, 50.0);
+	std::vector<CAdxNode*> raw;
+	raw.reserve(m_vNode.size());
+	for (size_t i = 0; i < m_vNode.size(); i++) {
+		raw.push_back(m_vNode[i].get());
+	}
+	m_AreaMap.MakeAreaMap(raw, 50.0);
 
 	return 0;
 }
@@ -105,7 +105,7 @@ int CSurfaceNode::NearestNodeSimple(CMzPoint& p, double upr_limit, CAdxNode** pp
 		double tmp_dst2 = n.m_Coord.DistanceSquared(p);
 		if (tmp_dst2 < min_dst2) {
 			min_dst2 = tmp_dst2;
-			p_nearest_node = m_vNode[i];
+			p_nearest_node = m_vNode[i].get();
 			exist_node = true;
 		}
 	}
@@ -312,9 +312,6 @@ int CSurfaceNode::Dump(CString& fpath)
 
 void CSurfaceNode::RemoveAll()
 {
-	for (int i = 0; i < m_vNode.size(); i++) {
-		delete m_vNode[i];
-	}
 	m_vNode.clear();
 
 	m_AreaMap.RemoveAll();

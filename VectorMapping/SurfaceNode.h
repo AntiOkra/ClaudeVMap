@@ -1,6 +1,7 @@
 #pragma once
 
 #include<vector>
+#include<memory>
 #include"AdxNode.h"
 #include"AreaMap.h"
 #include"MzPoint.h"
@@ -12,7 +13,7 @@ public:
 	CSurfaceNode();
 	~CSurfaceNode();
 
-	std::vector<CAdxNode*>	m_vNode;
+	std::vector<std::unique_ptr<CAdxNode>>	m_vNode;
 	CAreaMap				m_AreaMap;
 	CMzPoint				m_MappedForce;
 	CMzPoint				m_LossForce;

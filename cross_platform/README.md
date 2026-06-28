@@ -83,6 +83,11 @@ CLI:
 - **自己代入**(`AdxNode.cpp` `Copy`)
   `m_ForceVector = m_ForceVector;` を `= n.m_ForceVector;` に修正。
 
+- **所有権の明確化**(`SurfaceNode.h` / `.cpp`、`Adx.cpp`)
+  `CSurfaceNode::m_vNode` を生ポインタ + 手動 `new`/`delete` から
+  `std::vector<std::unique_ptr<CAdxNode>>` に変更(例外安全・リーク防止)。
+  ※ MFC 依存のため本環境ではコンパイル検証不可。Windows/VS でのビルド確認を推奨。
+
 - **未知ノード参照の暗黙吸収**(`CNastran.cpp` `Indexing`)
   要素が参照するノード ID が存在しない場合、`std::map::operator[]` が
   **黙って index 0 を挿入**し、誤ったノードに面積が積算され得ました。
@@ -160,6 +165,12 @@ CLI:
 荷重保存・面投影補間・密度比(粗⇄細)・モーメント保存・法線フィルタ・
 入力堅牢性・ADX 読込〜マッピングのエンドツーエンドまで含む 73 件のチェックが
 あります。
+
+## CI
+
+`.github/workflows/ci.yml` で、push 毎に移植コアを **Linux(gcc / clang)+
+Windows(MSVC)** でビルドし `ctest` を実行します(MFC GUI は Windows 専用の
+ため CI 対象外)。
 
 ## ディレクトリ構成
 
