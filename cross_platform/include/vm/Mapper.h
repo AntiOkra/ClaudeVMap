@@ -25,7 +25,7 @@
 
 namespace vm {
 
-enum class MapMode { SingleNearest, WeightedKNearest, FaceProjection };
+enum class MapMode { SingleNearest, WeightedKNearest, FaceProjection, SourceSampled };
 
 struct MapOptions {
     MapMode mode            = MapMode::SingleNearest;
@@ -33,6 +33,7 @@ struct MapOptions {
     double  idwPower        = 2.0;   // inverse-distance exponent
     bool    fallbackNearest = false; // assign out-of-range sources to global nearest
     bool    conserveTotal   = false; // rescale so total mapped == total applied
+    int     sampleLevel     = 3;     // SourceSampled: edge subdivisions per element
 };
 
 struct MappingResult {
@@ -65,6 +66,14 @@ private:
     // Distribute mapForce onto the nearest face within searchDistance.
     // Returns true if a face was found.
     bool ProjectOntoFace(const Vec3& p, const Vec3& mapForce, double searchDistance);
+    // Place one (point, force) sample using the mode's placement rule, updating
+    // the running result (counters and accumulated forces).
+    void PlaceForce(const Vec3& p, const Vec3& force, double searchDistance,
+                    const MapOptions& opt, MappingResult& res);
+    // Build the (point, force) samples to distribute. For SourceSampled this
+    // subdivides each source element; otherwise it is one sample per source node.
+    void GenerateSamples(const Nastran& nas, const Vec3& ratio, const MapOptions& opt,
+                         std::vector<std::pair<Vec3, Vec3>>& out) const;
 
     std::vector<SurfaceNode>& targets_;
     AreaMap                   areaMap_;

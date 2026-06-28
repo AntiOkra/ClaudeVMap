@@ -439,6 +439,76 @@ static void TestFaceProjectionNearVertex() {
     CHECK(Near(sum, 100.0, 1e-6), "near-corner: still conserved");
 }
 
+// Coarse source -> fine target. A single big source triangle with uniform
+// pressure is mapped onto a finely tiled target. Sampled mode must spread the
+// load over MANY target nodes (no spikes) while projection per source node
+// concentrates it on a few corners. Both must conserve the total.
+static void TestSampledCoarseToFine() {
+    std::printf("[sampled coarse->fine]\n");
+
+    // Fine target: big triangle (0,0)-(12,0)-(0,12) split into 4 sub-faces.
+    auto makeTargets = []() {
+        std::vector<vm::SurfaceNode> t;
+        t.push_back({1, vm::Vec3{0, 0, 0},   vm::Vec3{}});  // 0
+        t.push_back({2, vm::Vec3{6, 0, 0},   vm::Vec3{}});  // 1
+        t.push_back({3, vm::Vec3{12, 0, 0},  vm::Vec3{}});  // 2
+        t.push_back({4, vm::Vec3{0, 6, 0},   vm::Vec3{}});  // 3
+        t.push_back({5, vm::Vec3{6, 6, 0},   vm::Vec3{}});  // 4
+        t.push_back({6, vm::Vec3{0, 12, 0},  vm::Vec3{}});  // 5
+        return t;
+    };
+    std::vector<vm::TargetFace> faces = {
+        {{0, 1, 3}}, {{1, 2, 4}}, {{3, 4, 5}}, {{1, 3, 4}}
+    };
+
+    // Coarse source: one CTRIA3 covering the whole region, uniform Z pressure 1.
+    vm::Nastran nas;
+    for (vm::Vec3 c : {vm::Vec3{0, 0, 0}, vm::Vec3{12, 0, 0}, vm::Vec3{0, 12, 0}}) {
+        vm::NastranNode n;
+        n.coord = c;
+        n.normalPressure = vm::Vec3{0, 0, 1};
+        nas.nodes().push_back(n);
+    }
+    vm::NastranElement e;
+    e.type = vm::ElemType::CTRIA3;
+    e.nodeIndex[0] = 0; e.nodeIndex[1] = 1; e.nodeIndex[2] = 2;
+    nas.elements().push_back(e);
+    nas.ForceCalc();  // area = 72 -> total Z force = 72 * 1000 = 72000
+
+    const double expectedZ = 72000.0;
+
+    auto countNonzero = [](const std::vector<vm::SurfaceNode>& t) {
+        int c = 0;
+        for (const auto& n : t) if (n.force.z != 0.0) ++c;
+        return c;
+    };
+    auto totalZ = [](const std::vector<vm::SurfaceNode>& t) {
+        double s = 0; for (const auto& n : t) s += n.force.z; return s;
+    };
+
+    // Sampled: spreads over the fine mesh.
+    std::vector<vm::SurfaceNode> tSampled = makeTargets();
+    vm::Mapper mS(tSampled, 50.0);
+    mS.SetFaces(faces);
+    vm::MapOptions sOpt; sOpt.mode = vm::MapMode::SourceSampled; sOpt.sampleLevel = 4;
+    mS.Map(nas, 5.0, vm::Vec3{1, 1, 1}, sOpt);
+    CHECK(Near(totalZ(tSampled), expectedZ, 1.0), "sampled conserves total force");
+    CHECK(countNonzero(tSampled) >= 5, "sampled spreads load over many nodes");
+
+    // Projection per source node: concentrates on the corner nodes.
+    std::vector<vm::SurfaceNode> tProj = makeTargets();
+    vm::Mapper mP(tProj, 50.0);
+    mP.SetFaces(faces);
+    vm::MapOptions pOpt; pOpt.mode = vm::MapMode::FaceProjection;
+    mP.Map(nas, 5.0, vm::Vec3{1, 1, 1}, pOpt);
+    CHECK(Near(totalZ(tProj), expectedZ, 1.0), "projection conserves total force");
+    CHECK(countNonzero(tProj) <= 3, "projection concentrates on few corner nodes");
+
+    // The whole point: sampled touches strictly more nodes than projection.
+    CHECK(countNonzero(tSampled) > countNonzero(tProj),
+          "sampled distribution is smoother than per-node projection");
+}
+
 int main() {
     TestGeometry();
     TestAreaMapAdaptiveRange();
@@ -452,6 +522,7 @@ int main() {
     TestFallbackNoLoss();
     TestFaceProjection();
     TestFaceProjectionNearVertex();
+    TestSampledCoarseToFine();
 
     std::printf("\n%d checks, %d failures\n", g_checks, g_failures);
     return g_failures == 0 ? 0 : 1;

@@ -92,88 +92,75 @@ SurfaceNode* Mapper::GlobalNearest(const Vec3& p, double& distance) {
     return best;
 }
 
+void Mapper::PlaceForce(const Vec3& p, const Vec3& force, double searchDistance,
+                        const MapOptions& opt, MappingResult& res) {
+    bool placed = false;
+
+    if (opt.mode == MapMode::FaceProjection || opt.mode == MapMode::SourceSampled) {
+        placed = ProjectOntoFace(p, force, searchDistance);
+    } else if (opt.mode == MapMode::WeightedKNearest) {
+        std::vector<std::pair<SurfaceNode*, double>> candidates;
+        areaMap_.NodesInRange(p, searchDistance, candidates);
+        if (!candidates.empty()) {
+            const int k = (opt.k > 0) ? opt.k : 1;
+            if (static_cast<int>(candidates.size()) > k) {
+                std::partial_sort(
+                    candidates.begin(), candidates.begin() + k, candidates.end(),
+                    [](const auto& a, const auto& b) { return a.second < b.second; });
+                candidates.resize(k);
+            }
+            bool exactHit = false;
+            for (auto& c : candidates) if (c.second <= 1e-12) { exactHit = true; break; }
+            if (exactHit) {
+                for (auto& c : candidates)
+                    if (c.second <= 1e-12) { c.first->force += force; break; }
+            } else {
+                double wsum = 0.0;
+                std::vector<double> w(candidates.size());
+                for (std::size_t i = 0; i < candidates.size(); ++i) {
+                    w[i] = 1.0 / std::pow(candidates[i].second, opt.idwPower);
+                    wsum += w[i];
+                }
+                for (std::size_t i = 0; i < candidates.size(); ++i)
+                    candidates[i].first->force += force * (w[i] / wsum);
+            }
+            placed = true;
+        }
+    } else {
+        double distance = 0.0;
+        SurfaceNode* target = areaMap_.NearestNode(p, searchDistance, distance);
+        if (target != nullptr) { target->force += force; placed = true; }
+    }
+
+    if (placed) {
+        res.mappedForce += force;
+        ++res.mappedCount;
+        return;
+    }
+
+    double gdist = 0.0;
+    SurfaceNode* g = GlobalNearest(p, gdist);
+    if (gdist > res.maxLossDistance) res.maxLossDistance = gdist;
+    if (opt.fallbackNearest && g != nullptr) {
+        g->force += force;
+        res.mappedForce += force;
+        ++res.fallbackCount;
+    } else {
+        res.lossForce += force;
+        ++res.lossCount;
+    }
+}
+
 MappingResult Mapper::Map(const Nastran& nas, double searchDistance,
                           const Vec3& ratio, const MapOptions& opt) {
     MappingResult res;
 
-    std::vector<std::pair<SurfaceNode*, double>> candidates;
+    std::vector<std::pair<Vec3, Vec3>> samples;
+    GenerateSamples(nas, ratio, opt, samples);
 
-    for (const auto& n : nas.nodes()) {
-        const Vec3 mapForce{
-            n.force.x * ratio.x,
-            n.force.y * ratio.y,
-            n.force.z * ratio.z
-        };
-        res.appliedForce += mapForce;
-
-        bool placed = false;
-
-        if (opt.mode == MapMode::FaceProjection) {
-            if (ProjectOntoFace(n.coord, mapForce, searchDistance)) {
-                res.mappedForce += mapForce;
-                ++res.mappedCount;
-                placed = true;
-            }
-        } else if (opt.mode == MapMode::WeightedKNearest) {
-            areaMap_.NodesInRange(n.coord, searchDistance, candidates);
-            if (!candidates.empty()) {
-                // Keep the k nearest.
-                const int k = (opt.k > 0) ? opt.k : 1;
-                if (static_cast<int>(candidates.size()) > k) {
-                    std::partial_sort(
-                        candidates.begin(), candidates.begin() + k, candidates.end(),
-                        [](const auto& a, const auto& b) { return a.second < b.second; });
-                    candidates.resize(k);
-                }
-
-                // Inverse-distance weights (exact-hit collapses to that node).
-                double wsum = 0.0;
-                bool exactHit = false;
-                for (auto& c : candidates) {
-                    if (c.second <= 1e-12) { exactHit = true; break; }
-                }
-                if (exactHit) {
-                    for (auto& c : candidates) {
-                        if (c.second <= 1e-12) { c.first->force += mapForce; break; }
-                    }
-                } else {
-                    std::vector<double> w(candidates.size());
-                    for (std::size_t i = 0; i < candidates.size(); ++i) {
-                        w[i] = 1.0 / std::pow(candidates[i].second, opt.idwPower);
-                        wsum += w[i];
-                    }
-                    for (std::size_t i = 0; i < candidates.size(); ++i) {
-                        candidates[i].first->force += mapForce * (w[i] / wsum);
-                    }
-                }
-                res.mappedForce += mapForce;
-                ++res.mappedCount;
-                placed = true;
-            }
-        } else {
-            double distance = 0.0;
-            SurfaceNode* target = areaMap_.NearestNode(n.coord, searchDistance, distance);
-            if (target != nullptr) {
-                target->force += mapForce;
-                res.mappedForce += mapForce;
-                ++res.mappedCount;
-                placed = true;
-            }
-        }
-
-        if (!placed) {
-            double gdist = 0.0;
-            SurfaceNode* g = GlobalNearest(n.coord, gdist);
-            if (gdist > res.maxLossDistance) res.maxLossDistance = gdist;
-            if (opt.fallbackNearest && g != nullptr) {
-                g->force += mapForce;
-                res.mappedForce += mapForce;
-                ++res.fallbackCount;
-            } else {
-                res.lossForce += mapForce;
-                ++res.lossCount;
-            }
-        }
+    for (const auto& s : samples) {
+        res.appliedForce += s.second;
+        PlaceForce(s.first, s.second, searchDistance, opt, res);
     }
 
     if (opt.conserveTotal) {
@@ -199,6 +186,98 @@ MappingResult Mapper::Map(const Nastran& nas, double searchDistance,
     }
 
     return res;
+}
+
+void Mapper::GenerateSamples(const Nastran& nas, const Vec3& ratio,
+                             const MapOptions& opt,
+                             std::vector<std::pair<Vec3, Vec3>>& out) const {
+    out.clear();
+    const double kUnit = 1000.0;  // matches Nastran::ForceCalc unit convention
+
+    if (opt.mode != MapMode::SourceSampled) {
+        // One sample per source node, carrying its (already integrated) force.
+        out.reserve(nas.nodes().size());
+        for (const auto& n : nas.nodes()) {
+            out.emplace_back(n.coord, Vec3{n.force.x * ratio.x,
+                                           n.force.y * ratio.y,
+                                           n.force.z * ratio.z});
+        }
+        return;
+    }
+
+    const int k = (opt.sampleLevel > 0) ? opt.sampleLevel : 1;
+    const auto& nodes = nas.nodes();
+
+    // Subdivide a triangle into k*k congruent sub-triangles and emit one sample
+    // (pressure * sub-area * unit * ratio) at each sub-triangle centroid.
+    auto addTriangle = [&](const Vec3& C0, const Vec3& C1, const Vec3& C2,
+                           const Vec3& P0, const Vec3& P1, const Vec3& P2) {
+        const double area = AreaTriangle(C0, C1, C2);
+        if (area <= 0.0) return;
+        const double subArea = area / (k * k);
+        auto emit = [&](double b0, double b1, double b2) {
+            const Vec3 pos{C0.x * b0 + C1.x * b1 + C2.x * b2,
+                           C0.y * b0 + C1.y * b1 + C2.y * b2,
+                           C0.z * b0 + C1.z * b1 + C2.z * b2};
+            const Vec3 pr{P0.x * b0 + P1.x * b1 + P2.x * b2,
+                          P0.y * b0 + P1.y * b1 + P2.y * b2,
+                          P0.z * b0 + P1.z * b1 + P2.z * b2};
+            const double s = subArea * kUnit;
+            out.emplace_back(pos, Vec3{pr.x * s * ratio.x,
+                                       pr.y * s * ratio.y,
+                                       pr.z * s * ratio.z});
+        };
+        for (int i = 0; i < k; ++i) {
+            for (int j = 0; j < k - i; ++j) {
+                double b1 = (i + 1.0 / 3.0) / k, b2 = (j + 1.0 / 3.0) / k;
+                emit(1.0 - b1 - b2, b1, b2);                 // "up" sub-triangle
+                if (i + j <= k - 2) {
+                    b1 = (i + 2.0 / 3.0) / k; b2 = (j + 2.0 / 3.0) / k;
+                    emit(1.0 - b1 - b2, b1, b2);             // "down" sub-triangle
+                }
+            }
+        }
+    };
+
+    auto pressureOf = [&](int idx) {
+        return nodes[idx].normalPressure + nodes[idx].tangentPressure;
+    };
+
+    for (const auto& e : nas.elements()) {
+        if (e.type == ElemType::CTRIA3) {
+            addTriangle(nodes[e.nodeIndex[0]].coord, nodes[e.nodeIndex[1]].coord,
+                        nodes[e.nodeIndex[2]].coord,
+                        pressureOf(e.nodeIndex[0]), pressureOf(e.nodeIndex[1]),
+                        pressureOf(e.nodeIndex[2]));
+        } else if (e.type == ElemType::CQUAD4) {
+            addTriangle(nodes[e.nodeIndex[0]].coord, nodes[e.nodeIndex[1]].coord,
+                        nodes[e.nodeIndex[2]].coord,
+                        pressureOf(e.nodeIndex[0]), pressureOf(e.nodeIndex[1]),
+                        pressureOf(e.nodeIndex[2]));
+            addTriangle(nodes[e.nodeIndex[2]].coord, nodes[e.nodeIndex[3]].coord,
+                        nodes[e.nodeIndex[0]].coord,
+                        pressureOf(e.nodeIndex[2]), pressureOf(e.nodeIndex[3]),
+                        pressureOf(e.nodeIndex[0]));
+        } else { // CBEAM: sample midpoints of k equal segments along the line.
+            const Vec3& A = nodes[e.nodeIndex[0]].coord;
+            const Vec3& B = nodes[e.nodeIndex[1]].coord;
+            const Vec3  Pa = pressureOf(e.nodeIndex[0]);
+            const Vec3  Pb = pressureOf(e.nodeIndex[1]);
+            const double len = A.Distance(B);
+            if (len <= 0.0) continue;
+            const double seg = len / k;
+            for (int i = 0; i < k; ++i) {
+                const double t = (i + 0.5) / k;
+                const Vec3 pos{A.x + (B.x - A.x) * t, A.y + (B.y - A.y) * t,
+                               A.z + (B.z - A.z) * t};
+                const Vec3 pr{Pa.x + (Pb.x - Pa.x) * t, Pa.y + (Pb.y - Pa.y) * t,
+                              Pa.z + (Pb.z - Pa.z) * t};
+                const double s = seg * kUnit;
+                out.emplace_back(pos, Vec3{pr.x * s * ratio.x, pr.y * s * ratio.y,
+                                           pr.z * s * ratio.z});
+            }
+        }
+    }
 }
 
 int Mapper::ExportAdxForce(const std::string& path, const std::string& processId) const {

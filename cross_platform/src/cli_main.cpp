@@ -29,9 +29,11 @@ void Usage(const char* prog) {
         "  --ratio     <value>    uniform mapping ratio (default 1)\n"
         "  --ratio-xyz <x> <y> <z>  per-axis mapping ratio\n"
         "  --process   <id>       process_id written to the force file\n"
-        "  --mode      <m>        mapping mode: nearest (default) | weighted | projection\n"
+        "  --mode      <m>        mapping mode: nearest (default) | weighted |\n"
+        "                         projection | sampled\n"
         "  --k         <n>        neighbours for weighted mode (default 4)\n"
         "  --idw-power <p>        inverse-distance exponent (default 2)\n"
+        "  --samples   <n>        edge subdivisions per source element for sampled (default 3)\n"
         "  --no-loss              assign out-of-range sources to global nearest\n"
         "  --conserve             rescale result so total mapped == total applied\n";
 }
@@ -72,10 +74,12 @@ int main(int argc, char** argv) {
             if      (m == "nearest")    opt.mode = vm::MapMode::SingleNearest;
             else if (m == "weighted")   opt.mode = vm::MapMode::WeightedKNearest;
             else if (m == "projection") opt.mode = vm::MapMode::FaceProjection;
+            else if (m == "sampled")    opt.mode = vm::MapMode::SourceSampled;
             else { std::cerr << "Unknown mode: " << m << "\n"; return 2; }
         }
         else if (a == "--k")         opt.k = std::stoi(Arg(i, argc, argv));
         else if (a == "--idw-power") opt.idwPower = std::stod(Arg(i, argc, argv));
+        else if (a == "--samples")   opt.sampleLevel = std::stoi(Arg(i, argc, argv));
         else if (a == "--no-loss")   opt.fallbackNearest = true;
         else if (a == "--conserve")  opt.conserveTotal = true;
         else if (a == "--help" || a == "-h") { Usage(argv[0]); return 0; }
@@ -112,9 +116,10 @@ int main(int argc, char** argv) {
     }
 
     vm::Mapper mapper(targets, /*pitch=*/(distance > 50.0 ? distance : 50.0));
-    if (opt.mode == vm::MapMode::FaceProjection) {
+    if (opt.mode == vm::MapMode::FaceProjection ||
+        opt.mode == vm::MapMode::SourceSampled) {
         if (faces.empty()) {
-            std::cerr << "ERROR: no surface faces available for projection mode\n";
+            std::cerr << "ERROR: no surface faces available for this mode\n";
             return 1;
         }
         mapper.SetFaces(faces);

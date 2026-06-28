@@ -42,7 +42,8 @@ public:
 
     std::vector<NastranNode>&       nodes()    { return nodes_; }
     std::vector<NastranElement>&    elements() { return elements_; }
-    const std::vector<NastranNode>& nodes() const { return nodes_; }
+    const std::vector<NastranNode>&    nodes() const    { return nodes_; }
+    const std::vector<NastranElement>& elements() const { return elements_; }
 
 private:
     int  Indexing(std::string* log);
