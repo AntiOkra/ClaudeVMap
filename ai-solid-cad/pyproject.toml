@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ai-solid-cad"
+version = "0.1.0"
+description = "AI-driven solid CAD: describe a part in natural language, get a parametric B-rep solid (STEP/STL) via build123d + OpenCASCADE."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "ai-solid-cad contributors" }]
+keywords = ["cad", "solid-modeling", "build123d", "opencascade", "ai", "llm", "step", "stl"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering",
+    "License :: OSI Approved :: MIT License",
+]
+
+# The solid kernel. build123d bundles OCP (OpenCASCADE) as a binary wheel.
+dependencies = [
+    "build123d>=0.7",
+]
+
+[project.optional-dependencies]
+# The AI code-generation layer. Not required to run hand-written build123d code.
+ai = ["anthropic>=0.40"]
+dev = ["pytest>=7", "anthropic>=0.40"]
+
+[project.scripts]
+aicad = "ai_solid_cad.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/OWNER/ai-solid-cad"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/ai_solid_cad"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

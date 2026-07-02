@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.pytest_cache/
+
+# Generated CAD output
+*.step
+*.stp
+*.stl
+*.brep
+!examples/**/*.step
+
+# Env / secrets
+.env
